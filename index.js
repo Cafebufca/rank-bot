@@ -6,34 +6,22 @@ const {
   GatewayIntentBits,
   ChannelType,
   PermissionsBitField,
+  MessageFlags,
 } = require("discord.js");
 require("dotenv").config();
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // needed to read "CLOSE TICKET"
-  ],
-});
+/** ====== Your Server Config ====== */
+const SERVER_NAME = "Summit Account Boosting";
 
-client.commands = new Collection();
+const COMMAND_CHANNEL_ID = "1455724333333745796";
+const TICKET_CATEGORY_ID = "1455736127955931272";
+const STAFF_LOG_CHANNEL_ID = "1455724718970634261";
+const STAFF_ROLE_ID = "1454948532879491153";
 
-// ===== Load slash commands =====
-const commandsPath = path.join(__dirname, "commands");
-const commandFiles = fs.readdirSync(commandsPath).filter((f) => f.endsWith(".js"));
-
-for (const file of commandFiles) {
-  const command = require(path.join(commandsPath, file));
-  if (!command?.data?.name || typeof command.execute !== "function") {
-    console.log(`⚠️ Skipping invalid command file: ${file}`);
-    continue;
-  }
-  client.commands.set(command.data.name, command);
-}
-
-// ===== Ticket cooldown persistence =====
+/** ====== Ticket Cooldown (persists even if ticket is deleted) ====== */
+const TICKET_COOLDOWN_MS = 60_000;
 const COOLDOWN_FILE = path.join(__dirname, "ticket_cooldowns.json");
+
 function loadCooldowns() {
   try {
     return JSON.parse(fs.readFileSync(COOLDOWN_FILE, "utf8"));
@@ -44,64 +32,113 @@ function loadCooldowns() {
 function saveCooldowns(obj) {
   fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(obj, null, 2));
 }
+const ticketCooldowns = loadCooldowns(); // { userId: timestampMs }
 
-const ticketCooldowns = loadCooldowns(); // { "userId": timestampMs }
-const TICKET_COOLDOWN_MS = 60_000;
+function isSnowflake(id) {
+  return typeof id === "string" && /^[0-9]{15,21}$/.test(id.trim());
+}
 
-// ===== Config from .env =====
-const COMMAND_CHANNEL_ID = process.env.COMMAND_CHANNEL_ID; // the channel where you want the tutorial posted
-const STAFF_LOG_CHANNEL_ID = process.env.STAFF_LOG_CHANNEL_ID; // staff log channel
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // category to create tickets in
-const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID; // staff role that can see tickets
-const GAMEPASS_LINK = process.env.GAMEPASS_LINK; // your gamepass link (string)
+/** ====== Bot ====== */
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent, // required for "CLOSE TICKET"
+  ],
+});
 
-// ===== Tutorial texts =====
+client.commands = new Collection();
+
+/** ====== Load Slash Commands ====== */
+const commandsPath = path.join(__dirname, "commands");
+const commandFiles = fs.existsSync(commandsPath)
+  ? fs.readdirSync(commandsPath).filter((f) => f.endsWith(".js"))
+  : [];
+
+for (const file of commandFiles) {
+  const command = require(path.join(commandsPath, file));
+  if (!command?.data?.name || typeof command.execute !== "function") {
+    console.log(`⚠️ Skipping invalid command file: ${file}`);
+    continue;
+  }
+  client.commands.set(command.data.name, command);
+}
+
+/** ====== Tutorial Text ====== */
 function commandChannelTutorial() {
   return (
-    `📘 **How to use this server**\n\n` +
-    `**Step 1:** Go to this channel and run **/price**\n` +
-    `**Step 2:** Choose your current rank and your target rank from the dropdowns\n` +
-    `**Step 3:** The bot will calculate the cost (**50 Robux per level**) and show you the total privately\n` +
-    `**Step 4:** Click **🛒 Open Ticket** to create a ticket\n\n` +
-    `✅ After you open a ticket, we’ll send the gamepass link within **1–2 minutes** (please be patient).\n` +
-    `🧾 **Pricing rule:** 50 Robux per level (Bronze → Silver → Gold → Platinum → Diamond → Onyx → Nemesis → Archnemesis)\n\n` +
-    `🔒 **Closing tickets:** Type **CLOSE TICKET** in your ticket channel to close it.\n`
+    `📘 **Welcome to ${SERVER_NAME} — How to use this channel**\n\n` +
+    `**Step 1:** Type **/price** in this channel.\n` +
+    `**Step 2:** Pick your current rank and the rank you want from the dropdowns.\n` +
+    `**Step 3:** Pricing is **50 Robux per level** — the bot will calculate the total (private).\n` +
+    `**Step 4:** Click **🛒 Open Ticket** to create a ticket.\n\n` +
+    `⏳ After you open a ticket, staff will send the gamepass link within **1–2 minutes**.\n\n` +
+    `🔒 **To close a ticket:** Type **CLOSE TICKET** inside your ticket channel.\n` +
+    `⏱️ **Ticket cooldown:** 1 ticket per minute (still applies even if you delete/close your old ticket).\n`
   );
 }
 
-function ticketTutorial(userId) {
+function ticketTutorial(fromWhereText) {
   return (
     `🎟️ **Ticket Created**\n\n` +
     `**Step 1:** Confirm your request here (current rank → target rank).\n` +
-    `**Step 2:** Wait for staff — the gamepass link will be sent within **1–2 minutes**.\n\n` +
-    `🔗 **Gamepass link:** ${GAMEPASS_LINK || "(staff will send)"}\n\n` +
-    `🧾 **Important:** To close this ticket, type **CLOSE TICKET**.\n` +
-    `⏱️ **Cooldown:** You can open **one ticket per minute**. Even if you close/delete your old ticket, the cooldown still applies.\n` +
-    `<@${userId}>`
+    `**Step 2:** Wait for staff — we will send the gamepass link within **1–2 minutes**.\n\n` +
+    `🧾 **Pricing rule:** 50 Robux per level.\n` +
+    `🧠 Tip: Use **/price** in <#${COMMAND_CHANNEL_ID}> if you need to re-check the total.\n\n` +
+    `❌ **To close this ticket:** Type **CLOSE TICKET**\n` +
+    `⏱️ **Cooldown:** 1 ticket per minute.\n\n` +
+    `${fromWhereText || ""}`
   );
 }
 
-// ===== Post tutorial in command channel on startup =====
+/** ====== Post tutorial in command channel (once-ish) ====== */
 async function postCommandTutorialOnce() {
-  if (!COMMAND_CHANNEL_ID) return;
-
   const ch = await client.channels.fetch(COMMAND_CHANNEL_ID).catch(() => null);
   if (!ch || !ch.isTextBased()) return;
 
-  // Optional: Only post if last message isn't already the tutorial (simple check)
-  const msgs = await ch.messages.fetch({ limit: 5 }).catch(() => null);
-  const already = msgs?.some((m) => m.author.id === client.user.id && m.content.includes("How to use this server"));
+  const msgs = await ch.messages.fetch({ limit: 10 }).catch(() => null);
+  const already = msgs?.some(
+    (m) => m.author.id === client.user.id && m.content.includes("How to use this channel")
+  );
   if (already) return;
 
   await ch.send(commandChannelTutorial()).catch(() => null);
 }
 
-// ===== Create ticket helper =====
+/** ====== Find existing open ticket for user ====== */
+function findExistingTicketChannel(guild, userId) {
+  // We store userId in channel topic. This is reliable and fast.
+  return guild.channels.cache.find(
+    (c) =>
+      c.type === ChannelType.GuildText &&
+      c.parentId === TICKET_CATEGORY_ID &&
+      typeof c.topic === "string" &&
+      c.topic.includes(`ticket_owner:${userId}`)
+  );
+}
+
+/** ====== Create Ticket ====== */
 async function createTicket(interaction) {
   const guild = interaction.guild;
   const user = interaction.user;
 
-  // Cooldown check (persists even if channels are deleted)
+  if (!guild) {
+    return interaction.reply({
+      content: "❌ This command can only be used in a server.",
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  // If user already has an open ticket, send them to it (no cooldown consumed)
+  const existing = findExistingTicketChannel(guild, user.id);
+  if (existing) {
+    return interaction.reply({
+      content: `⚠️ You already have an open ticket: ${existing}\nType **CLOSE TICKET** in it to close it.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  // Cooldown check (persists even if ticket is deleted)
   const last = ticketCooldowns[user.id] || 0;
   const now = Date.now();
   const remaining = TICKET_COOLDOWN_MS - (now - last);
@@ -110,85 +147,93 @@ async function createTicket(interaction) {
     const seconds = Math.ceil(remaining / 1000);
     return interaction.reply({
       content: `⏱️ Please wait **${seconds}s** before opening another ticket.`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 
-  if (!TICKET_CATEGORY_ID) {
+  if (!isSnowflake(TICKET_CATEGORY_ID)) {
     return interaction.reply({
-      content: "❌ Ticket system is not configured (missing TICKET_CATEGORY_ID).",
-      ephemeral: true,
+      content: "❌ Missing or invalid ticket category ID.",
+      flags: MessageFlags.Ephemeral,
     });
   }
 
-  // Record cooldown immediately so it still counts even if channel is deleted
+  // Consume cooldown immediately (even if they delete the channel later)
   ticketCooldowns[user.id] = now;
   saveCooldowns(ticketCooldowns);
 
-  // Create channel
-  const safeName = `ticket-${user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, "");
+  const safeName = `ticket-${user.username}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 90);
+
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionsBitField.Flags.ViewChannel],
+    },
+    {
+      id: user.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory,
+      ],
+    },
+    {
+      id: client.user.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory,
+        PermissionsBitField.Flags.ManageChannels,
+        PermissionsBitField.Flags.ManagePermissions,
+      ],
+    },
+  ];
+
+  // Staff role access + ping
+  if (isSnowflake(STAFF_ROLE_ID)) {
+    overwrites.push({
+      id: STAFF_ROLE_ID,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory,
+        PermissionsBitField.Flags.ManageChannels,
+      ],
+    });
+  }
+
   const channel = await guild.channels.create({
-    name: safeName.slice(0, 90),
+    name: safeName || `ticket-${user.id}`,
     type: ChannelType.GuildText,
     parent: TICKET_CATEGORY_ID,
-    permissionOverwrites: [
-      {
-        id: guild.roles.everyone.id,
-        deny: [PermissionsBitField.Flags.ViewChannel],
-      },
-      {
-        id: user.id,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-        ],
-      },
-      ...(STAFF_ROLE_ID
-        ? [
-            {
-              id: STAFF_ROLE_ID,
-              allow: [
-                PermissionsBitField.Flags.ViewChannel,
-                PermissionsBitField.Flags.SendMessages,
-                PermissionsBitField.Flags.ReadMessageHistory,
-                PermissionsBitField.Flags.ManageChannels,
-              ],
-            },
-          ]
-        : []),
-      {
-        id: client.user.id,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-          PermissionsBitField.Flags.ManageChannels,
-          PermissionsBitField.Flags.ManagePermissions,
-        ],
-      },
-    ],
+    topic: `ticket_owner:${user.id}`,
+    permissionOverwrites: overwrites,
   });
 
-  // Send tutorial in the ticket
-  await channel.send(ticketTutorial(user.id));
+  const staffPing = isSnowflake(STAFF_ROLE_ID) ? `<@&${STAFF_ROLE_ID}>` : "@staff";
+  await channel.send(`${staffPing} 🛒 **New ticket opened by** <@${user.id}>`).catch(() => null);
+  await channel.send(ticketTutorial(`Opened from: <#${interaction.channelId}>`)).catch(() => null);
 
   // Staff log
-  if (STAFF_LOG_CHANNEL_ID) {
+  if (isSnowflake(STAFF_LOG_CHANNEL_ID)) {
     const staffLog = await client.channels.fetch(STAFF_LOG_CHANNEL_ID).catch(() => null);
     if (staffLog?.isTextBased()) {
-      staffLog.send(`🛒 Ticket opened by **${user.tag}** → ${channel}`).catch(() => null);
+      staffLog
+        .send(`🧾 **New Ticket** by **${user.tag}** → ${channel} | ${staffPing}`)
+        .catch(() => null);
     }
   }
 
-  // Confirm to user
   return interaction.reply({
-    content: `✅ Ticket created: ${channel}\nType **CLOSE TICKET** inside it when you’re done.`,
-    ephemeral: true,
+    content: `✅ Ticket created: ${channel}\nType **CLOSE TICKET** inside it to close it.`,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
-// ===== Events =====
+/** ====== Events ====== */
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   await postCommandTutorialOnce();
@@ -214,9 +259,9 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isRepliable()) {
       const msg = "❌ Something went wrong. Please try again.";
       if (interaction.deferred || interaction.replied) {
-        interaction.followUp({ content: msg, ephemeral: true }).catch(() => null);
+        interaction.followUp({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => null);
       } else {
-        interaction.reply({ content: msg, ephemeral: true }).catch(() => null);
+        interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => null);
       }
     }
   }
@@ -224,34 +269,41 @@ client.on("interactionCreate", async (interaction) => {
 
 // Close ticket by text
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-  if (!message.guild) return;
+  try {
+    if (message.author.bot) return;
+    if (!message.guild) return;
 
-  if (message.content.trim().toUpperCase() !== "CLOSE TICKET") return;
+    if (message.content.trim().toUpperCase() !== "CLOSE TICKET") return;
 
-  // Only close channels that look like tickets
-  if (!message.channel.name.startsWith("ticket-")) return;
-
-  // Optional: allow only ticket owner or staff
-  const isStaff = STAFF_ROLE_ID ? message.member.roles.cache.has(STAFF_ROLE_ID) : false;
-  const isOwnerMentioned = message.channel.topic && message.channel.topic.includes(message.author.id); // (not used here)
-  // Simple rule: allow anyone in the ticket to close it
-  // If you want only owner/staff, tell me and I’ll lock it down.
-
-  await message.channel.send("✅ Closing ticket...").catch(() => null);
-
-  // Staff log
-  if (STAFF_LOG_CHANNEL_ID) {
-    const staffLog = await client.channels.fetch(STAFF_LOG_CHANNEL_ID).catch(() => null);
-    if (staffLog?.isTextBased()) {
-      staffLog.send(`🔒 Ticket closed by **${message.author.tag}** in #${message.channel.name}`).catch(() => null);
+    // Only close channels that are tickets in the ticket category
+    if (
+      message.channel.type !== ChannelType.GuildText ||
+      message.channel.parentId !== TICKET_CATEGORY_ID ||
+      !message.channel.topic?.includes("ticket_owner:")
+    ) {
+      return;
     }
-  }
 
-  // Delete after a short delay
-  setTimeout(() => {
-    message.channel.delete().catch(() => null);
-  }, 2000);
+    const staffPing = isSnowflake(STAFF_ROLE_ID) ? `<@&${STAFF_ROLE_ID}>` : "@staff";
+
+    await message.channel.send("✅ Closing ticket...").catch(() => null);
+
+    // Staff log
+    if (isSnowflake(STAFF_LOG_CHANNEL_ID)) {
+      const staffLog = await client.channels.fetch(STAFF_LOG_CHANNEL_ID).catch(() => null);
+      if (staffLog?.isTextBased()) {
+        staffLog
+          .send(`🔒 **Ticket Closed** by **${message.author.tag}** in #${message.channel.name} | ${staffPing}`)
+          .catch(() => null);
+      }
+    }
+
+    setTimeout(() => {
+      message.channel.delete().catch(() => null);
+    }, 2000);
+  } catch (err) {
+    console.error(err);
+  }
 });
 
 client.login(process.env.DISCORD_TOKEN);
