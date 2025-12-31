@@ -1,3 +1,4 @@
+// index.js
 const fs = require("fs");
 const path = require("path");
 const {
@@ -7,10 +8,13 @@ const {
   ChannelType,
   PermissionsBitField,
   MessageFlags,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 require("dotenv").config();
 
-/** ====== Your Server Config ====== */
+/** ====== Your Server Config (hardcoded as requested) ====== */
 const SERVER_NAME = "Summit Account Boosting";
 
 const COMMAND_CHANNEL_ID = "1455724333333745796";
@@ -38,12 +42,17 @@ function isSnowflake(id) {
   return typeof id === "string" && /^[0-9]{15,21}$/.test(id.trim());
 }
 
+const RESPECT_TEXT =
+  "Keep in mind that our employees/boosters spend the time they should be doing other stuff in to come and help you. " +
+  "Please be respectful and abide by the rules. You must pay first using a gamepass, and then we will start the boosting process. " +
+  "If our employees need to leave, do not argue, as it is up to them if they want to leave. Enjoy your boosting!";
+
 /** ====== Bot ====== */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // required for "CLOSE TICKET"
+    GatewayIntentBits.MessageContent, // needed for "CLOSE TICKET"
   ],
 });
 
@@ -70,24 +79,32 @@ function commandChannelTutorial() {
     `📘 **Welcome to ${SERVER_NAME} — How to use this channel**\n\n` +
     `**Step 1:** Type **/price** in this channel.\n` +
     `**Step 2:** Pick your current rank and the rank you want from the dropdowns.\n` +
-    `**Step 3:** Pricing is **50 Robux per level** — the bot will calculate the total (private).\n` +
-    `**Step 4:** Click **🛒 Open Ticket** to create a ticket.\n\n` +
+    `**Step 3:** The bot will show a quote (private) and you click **Confirm Price**.\n` +
+    `**Step 4:** Then click **🛒 Open Ticket**.\n\n` +
+    `🧾 **Pricing:** Step-based tiered pricing starting at **100 Robux** and increases by **+10 Robux per step** up to Archnemesis.\n` +
+    `🧾 The bot also shows an **estimated gamepass price** to cover Roblox fees.\n\n` +
     `⏳ After you open a ticket, staff will send the gamepass link within **1–2 minutes**.\n\n` +
+    `${RESPECT_TEXT}\n\n` +
     `🔒 **To close a ticket:** Type **CLOSE TICKET** inside your ticket channel.\n` +
     `⏱️ **Ticket cooldown:** 1 ticket per minute (still applies even if you delete/close your old ticket).\n`
   );
 }
 
-function ticketTutorial(fromWhereText) {
+function ticketTutorial(userId, fromRank, toRank, steps, net, gross) {
+  const details =
+    fromRank && toRank
+      ? `\n\n📊 **Quote Summary**\n• From: ${fromRank}\n• To: ${toRank}\n• Steps: ${steps}\n• Net: ${net} Robux\n• Gamepass (est): ${gross} Robux`
+      : "";
+
   return (
     `🎟️ **Ticket Created**\n\n` +
     `**Step 1:** Confirm your request here (current rank → target rank).\n` +
     `**Step 2:** Wait for staff — we will send the gamepass link within **1–2 minutes**.\n\n` +
-    `🧾 **Pricing rule:** 50 Robux per level.\n` +
-    `🧠 Tip: Use **/price** in <#${COMMAND_CHANNEL_ID}> if you need to re-check the total.\n\n` +
+    `${RESPECT_TEXT}\n` +
+    `${details}\n\n` +
     `❌ **To close this ticket:** Type **CLOSE TICKET**\n` +
-    `⏱️ **Cooldown:** 1 ticket per minute.\n\n` +
-    `${fromWhereText || ""}`
+    `⏱️ **Cooldown:** 1 ticket per minute (even if you delete/close the old one).\n\n` +
+    `<@${userId}>`
   );
 }
 
@@ -107,7 +124,6 @@ async function postCommandTutorialOnce() {
 
 /** ====== Find existing open ticket for user ====== */
 function findExistingTicketChannel(guild, userId) {
-  // We store userId in channel topic. This is reliable and fast.
   return guild.channels.cache.find(
     (c) =>
       c.type === ChannelType.GuildText &&
@@ -118,18 +134,18 @@ function findExistingTicketChannel(guild, userId) {
 }
 
 /** ====== Create Ticket ====== */
-async function createTicket(interaction) {
+async function createTicket(interaction, quote) {
   const guild = interaction.guild;
   const user = interaction.user;
 
   if (!guild) {
     return interaction.reply({
-      content: "❌ This command can only be used in a server.",
+      content: "❌ This can only be used in a server.",
       flags: MessageFlags.Ephemeral,
     });
   }
 
-  // If user already has an open ticket, send them to it (no cooldown consumed)
+  // If user already has an open ticket, link them to it (no cooldown consumed)
   const existing = findExistingTicketChannel(guild, user.id);
   if (existing) {
     return interaction.reply({
@@ -158,7 +174,7 @@ async function createTicket(interaction) {
     });
   }
 
-  // Consume cooldown immediately (even if they delete the channel later)
+  // Consume cooldown immediately (still counts even if ticket is deleted)
   ticketCooldowns[user.id] = now;
   saveCooldowns(ticketCooldowns);
 
@@ -180,16 +196,15 @@ async function createTicket(interaction) {
         PermissionsBitField.Flags.ReadMessageHistory,
       ],
     },
-{
-  id: client.user.id,
-  allow: [
-    PermissionsBitField.Flags.ViewChannel,
-    PermissionsBitField.Flags.SendMessages,
-    PermissionsBitField.Flags.ReadMessageHistory,
-    PermissionsBitField.Flags.ManageChannels,
-  ],
-},
-
+    {
+      id: client.user.id,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory,
+        PermissionsBitField.Flags.ManageChannels,
+      ],
+    },
   ];
 
   // Staff role access + ping
@@ -205,10 +220,11 @@ async function createTicket(interaction) {
     });
   }
 
+  // Filter any accidental undefined flags
   for (const ow of overwrites) {
-  if (ow.allow) ow.allow = ow.allow.filter(Boolean);
-  if (ow.deny) ow.deny = ow.deny.filter(Boolean);
-}
+    if (ow.allow) ow.allow = ow.allow.filter(Boolean);
+    if (ow.deny) ow.deny = ow.deny.filter(Boolean);
+  }
 
   const channel = await guild.channels.create({
     name: safeName || `ticket-${user.id}`,
@@ -219,15 +235,31 @@ async function createTicket(interaction) {
   });
 
   const staffPing = isSnowflake(STAFF_ROLE_ID) ? `<@&${STAFF_ROLE_ID}>` : "@staff";
+
   await channel.send(`${staffPing} 🛒 **New ticket opened by** <@${user.id}>`).catch(() => null);
-  await channel.send(ticketTutorial(`Opened from: <#${interaction.channelId}>`)).catch(() => null);
+
+  // If we have quote info from confirm button, include it in the ticket tutorial
+  const fromRank = quote?.fromRank || null;
+  const toRank = quote?.toRank || null;
+  const steps = quote?.steps || null;
+  const net = quote?.net || null;
+  const gross = quote?.gross || null;
+
+  await channel
+    .send(ticketTutorial(user.id, fromRank, toRank, steps, net, gross))
+    .catch(() => null);
 
   // Staff log
   if (isSnowflake(STAFF_LOG_CHANNEL_ID)) {
     const staffLog = await client.channels.fetch(STAFF_LOG_CHANNEL_ID).catch(() => null);
     if (staffLog?.isTextBased()) {
       staffLog
-        .send(`🧾 **New Ticket** by **${user.tag}** → ${channel} | ${staffPing}`)
+        .send(
+          `🧾 **New Ticket** by **${user.tag}** → ${channel} | ${staffPing}` +
+            (fromRank && toRank
+              ? `\n📊 ${fromRank} → ${toRank} (${steps} steps)\n💰 Net: ${net} | Gamepass (est): ${gross}`
+              : "")
+        )
         .catch(() => null);
     }
   }
@@ -236,6 +268,43 @@ async function createTicket(interaction) {
     content: `✅ Ticket created: ${channel}\nType **CLOSE TICKET** inside it to close it.`,
     flags: MessageFlags.Ephemeral,
   });
+}
+
+/** ====== Handle Price Confirmation Flow ======
+ * price.js sends buttons:
+ *  - price_confirm:fromIndex:toIndex:net:gross:levels
+ *  - price_cancel
+ */
+function parsePriceConfirm(customId) {
+  // customId format: price_confirm:fromIndex:toIndex:net:gross:levels
+  const parts = customId.split(":");
+  if (parts.length !== 7) return null;
+  const [, fromIndex, toIndex, net, gross, levels] = parts;
+
+  const fi = Number(fromIndex);
+  const ti = Number(toIndex);
+  const n = Number(net);
+  const g = Number(gross);
+  const lv = Number(levels);
+
+  if (![fi, ti, n, g, lv].every((x) => Number.isFinite(x))) return null;
+  return { fromIndex: fi, toIndex: ti, net: n, gross: g, levels: lv };
+}
+
+/** ====== Rank ladder (must match price.js) ====== */
+const RANKS = [
+  "Bronze 1", "Bronze 2", "Bronze 3",
+  "Silver 1", "Silver 2", "Silver 3",
+  "Gold 1", "Gold 2", "Gold 3",
+  "Platinum 1", "Platinum 2", "Platinum 3",
+  "Diamond 1", "Diamond 2", "Diamond 3",
+  "Onyx 1", "Onyx 2", "Onyx 3",
+  "Nemesis",
+  "Archnemesis",
+];
+
+function fmt(n) {
+  return Number(n).toLocaleString("en-US");
 }
 
 /** ====== Events ====== */
@@ -254,10 +323,90 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Ticket button
-    if (interaction.isButton() && interaction.customId === "open_ticket") {
-      await createTicket(interaction);
-      return;
+    // Buttons
+    if (interaction.isButton()) {
+      // Cancel the quote
+      if (interaction.customId === "price_cancel") {
+        // Ephemeral message edit
+        await interaction.update({
+          content: "❌ Cancelled.",
+          components: [],
+        });
+        // Try to delete after a short delay
+        setTimeout(async () => {
+          try {
+            await interaction.deleteReply();
+          } catch {}
+        }, 5000);
+        return;
+      }
+
+      // Confirm the quote → show Open Ticket button
+      if (interaction.customId.startsWith("price_confirm:")) {
+        const parsed = parsePriceConfirm(interaction.customId);
+        if (!parsed) {
+          await interaction.reply({
+            content: "❌ Could not read the quote. Please run /price again.",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
+        const fromRank = RANKS[parsed.fromIndex] || "Unknown";
+        const toRank = RANKS[parsed.toIndex] || "Unknown";
+
+        // Replace components with Open Ticket button, and store quote in its customId
+        // We'll encode minimal quote into open_ticket id for use during ticket creation.
+        const openTicketId = `open_ticket:${parsed.fromIndex}:${parsed.toIndex}:${parsed.net}:${parsed.gross}:${parsed.levels}`;
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel("🛒 Open Ticket")
+            .setStyle(ButtonStyle.Primary)
+            .setCustomId(openTicketId)
+        );
+
+        await interaction.update({
+          content:
+            `✅ **Confirmed**\n\n` +
+            `📊 ${fromRank} → ${toRank} (${parsed.levels} steps)\n` +
+            `💰 Net: **${fmt(parsed.net)} Robux**\n` +
+            `🧾 Gamepass (est): **${fmt(parsed.gross)} Robux**\n\n` +
+            `Click **🛒 Open Ticket** to proceed.`,
+          components: [row],
+        });
+
+        return;
+      }
+
+      // Open ticket button (with quote payload)
+      if (interaction.customId.startsWith("open_ticket")) {
+        // Accept both old "open_ticket" and new "open_ticket:..."
+        let quote = null;
+
+        const parts = interaction.customId.split(":");
+        if (parts.length === 6) {
+          const [, fromIndex, toIndex, net, gross, levels] = parts;
+          const fi = Number(fromIndex);
+          const ti = Number(toIndex);
+          const n = Number(net);
+          const g = Number(gross);
+          const lv = Number(levels);
+
+          if ([fi, ti, n, g, lv].every((x) => Number.isFinite(x))) {
+            quote = {
+              fromRank: RANKS[fi] || null,
+              toRank: RANKS[ti] || null,
+              steps: lv,
+              net: fmt(n),
+              gross: fmt(g),
+            };
+          }
+        }
+
+        await createTicket(interaction, quote);
+        return;
+      }
     }
   } catch (err) {
     console.error(err);
@@ -298,7 +447,9 @@ client.on("messageCreate", async (message) => {
       const staffLog = await client.channels.fetch(STAFF_LOG_CHANNEL_ID).catch(() => null);
       if (staffLog?.isTextBased()) {
         staffLog
-          .send(`🔒 **Ticket Closed** by **${message.author.tag}** in #${message.channel.name} | ${staffPing}`)
+          .send(
+            `🔒 **Ticket Closed** by **${message.author.tag}** in #${message.channel.name} | ${staffPing}`
+          )
           .catch(() => null);
       }
     }
@@ -312,5 +463,3 @@ client.on("messageCreate", async (message) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
-
-
