@@ -278,7 +278,8 @@ async function createTicket(interaction, quote) {
 function parsePriceConfirm(customId) {
   // customId format: price_confirm:fromIndex:toIndex:net:gross:levels
   const parts = customId.split(":");
-  if (parts.length !== 7) return null;
+  if (parts.length !== 6) return null;
+
   const [, fromIndex, toIndex, net, gross, levels] = parts;
 
   const fi = Number(fromIndex);
@@ -290,6 +291,7 @@ function parsePriceConfirm(customId) {
   if (![fi, ti, n, g, lv].every((x) => Number.isFinite(x))) return null;
   return { fromIndex: fi, toIndex: ti, net: n, gross: g, levels: lv };
 }
+
 
 /** ====== Rank ladder (must match price.js) ====== */
 const RANKS = [
@@ -463,3 +465,4 @@ client.on("messageCreate", async (message) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
