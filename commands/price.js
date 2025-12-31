@@ -1,19 +1,18 @@
+// commands/price.js
 const {
   SlashCommandBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
 } = require("discord.js");
 
-const PRICE_PER_LEVEL = 50;
-
-// ✅ Your IDs
-const ALLOWED_CHANNEL_ID = "1455724333333745796";
+// ====== IDs (hardcoded as requested) ======
+const COMMAND_CHANNEL_ID = "1455724333333745796";
 const STAFF_LOG_CHANNEL_ID = "1455724718970634261";
+const STAFF_ROLE_ID = "1454948532879491153";
 
-// ⏱ Cooldown
-const COOLDOWN_MS = 60_000;
-
+// ====== Rank ladder (lowest -> highest) ======
 const RANKS = [
   "Bronze 1", "Bronze 2", "Bronze 3",
   "Silver 1", "Silver 2", "Silver 3",
@@ -25,20 +24,49 @@ const RANKS = [
   "Archnemesis",
 ];
 
-const rankChoices = RANKS.map(r => ({ name: r, value: r }));
+const rankChoices = RANKS.map((r) => ({ name: r, value: r }));
+
+// ====== Pricing rules ======
+// Step cost starts at 100 for the first step (Bronze 1 -> Bronze 2),
+// then increases by +10 for each next step up the ladder.
+// stepCost(i) is the cost to go from RANKS[i] -> RANKS[i+1]
+function stepCost(i) {
+  return 100 + 10 * i;
+}
+
+function calcNetPrice(fromIndex, toIndex) {
+  let total = 0;
+  for (let i = fromIndex; i < toIndex; i++) total += stepCost(i);
+  return total;
+}
+
+// Roblox "tax" helper: to receive NET Robux, buyer must pay GROSS via gamepass
+// Roblox typically pays out 70% to seller (30% fee).
+function grossFromNet(net) {
+  return Math.ceil(net / 0.7);
+}
+
+function fmt(n) {
+  return Number(n).toLocaleString("en-US");
+}
+
+const RESPECT_TEXT =
+  "Keep in mind that our employees/boosters spend the time they should be doing other stuff in to come and help you. " +
+  "Please be respectful and abide by the rules. You must pay first using a gamepass, and then we will start the boosting process. " +
+  "If our employees need to leave, do not argue, as it is up to them if they want to leave. Enjoy your boosting!";
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("price")
-    .setDescription("Calculate the Robux cost to rank up.")
-    .addStringOption(option =>
+    .setDescription("Get a quote for a rank up (tiered pricing + Roblox tax estimate).")
+    .addStringOption((option) =>
       option
         .setName("rank")
         .setDescription("Your current rank")
         .setRequired(true)
         .addChoices(...rankChoices)
     )
-    .addStringOption(option =>
+    .addStringOption((option) =>
       option
         .setName("to")
         .setDescription("Rank you want to reach")
@@ -47,101 +75,101 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    // 📍 Channel restriction
-    if (interaction.channelId !== ALLOWED_CHANNEL_ID) {
+    // Restrict to command channel
+    if (interaction.channelId !== COMMAND_CHANNEL_ID) {
       return interaction.reply({
-        content: "❌ Please use this command in the designated pricing channel.",
-        ephemeral: true,
+        content: `❌ Please use this command in <#${COMMAND_CHANNEL_ID}>.`,
+        flags: MessageFlags.Ephemeral,
       });
     }
-
-    // Create cooldown store + quotes store once
-    if (!interaction.client.cooldowns) interaction.client.cooldowns = new Map();
-    if (!interaction.client.priceQuotes) interaction.client.priceQuotes = new Map();
-
-    // ⏱ Cooldown check (per user)
-    const now = Date.now();
-    const last = interaction.client.cooldowns.get(interaction.user.id) || 0;
-    const remaining = COOLDOWN_MS - (now - last);
-
-    if (remaining > 0) {
-      const seconds = Math.ceil(remaining / 1000);
-      return interaction.reply({
-        content: `⏳ Please wait **${seconds}s** before requesting another price.`,
-        ephemeral: true,
-      });
-    }
-
-    // Set cooldown timestamp immediately
-    interaction.client.cooldowns.set(interaction.user.id, now);
-
-    await interaction.deferReply({ ephemeral: true });
 
     const fromRank = interaction.options.getString("rank");
     const toRank = interaction.options.getString("to");
 
     const fromIndex = RANKS.indexOf(fromRank);
     const toIndex = RANKS.indexOf(toRank);
-    const levels = toIndex - fromIndex;
 
-    if (levels <= 0) {
-      return interaction.editReply(
-        `❌ Target rank must be higher than current.\nYou selected **${fromRank} → ${toRank}**.`
-      );
+    if (fromIndex === -1 || toIndex === -1) {
+      return interaction.reply({
+        content: "❌ Invalid rank selection. Please try again.",
+        flags: MessageFlags.Ephemeral,
+      });
     }
 
-    const price = levels * PRICE_PER_LEVEL;
+    const levels = toIndex - fromIndex;
+    if (levels <= 0) {
+      return interaction.reply({
+        content: `❌ Target rank must be higher than current.\nYou selected **${fromRank} → ${toRank}**.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
 
-    // Store quote for ticket flow
-    interaction.client.priceQuotes.set(interaction.user.id, {
-      fromRank,
-      toRank,
-      levels,
-      price,
-      createdAt: now,
-    });
+    // Calculate pricing
+    const net = calcNetPrice(fromIndex, toIndex);
+    const gross = grossFromNet(net);
 
-    // 🛒 Button: Open Ticket
+    // For transparency, show first/last step cost
+    const firstStep = stepCost(fromIndex);
+    const lastStep = stepCost(toIndex - 1);
+
+    // Confirmation buttons (index.js will handle these customIds)
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setLabel("🛒 Open Ticket")
-        .setStyle(ButtonStyle.Primary)
-        .setCustomId("open_ticket")
+        .setLabel("✅ Confirm Price")
+        .setStyle(ButtonStyle.Success)
+        .setCustomId(
+          // encode the quote in the button id (kept short; index.js will parse this)
+          `price_confirm:${fromIndex}:${toIndex}:${net}:${gross}:${levels}`
+        ),
+      new ButtonBuilder()
+        .setLabel("❌ Cancel")
+        .setStyle(ButtonStyle.Secondary)
+        .setCustomId("price_cancel")
     );
 
-    await interaction.editReply({
+    // Initial quote (private)
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
       content:
-        `📈 **Price Calculation**\n\n` +
+        `📈 **Price Quote**\n\n` +
         `• **From:** ${fromRank}\n` +
         `• **To:** ${toRank}\n` +
-        `• **Levels:** ${levels}\n\n` +
-        `💰 **Total:** **${price} Robux**\n\n` +
+        `• **Steps:** ${levels}\n\n` +
+        `🧾 **Tiered pricing:** first step **${fmt(firstStep)}**, last step **${fmt(lastStep)}** (increases by +10 each step)\n\n` +
+        `💰 **Total (net): ${fmt(net)} Robux**\n` +
+        `🧾 **Gamepass price (est. w/ Roblox fee): ${fmt(gross)} Robux**\n\n` +
+        `⏳ After you open a ticket, staff will send the gamepass link within **1–2 minutes**.\n\n` +
+        `${RESPECT_TEXT}\n\n` +
+        `✅ Click **Confirm Price** to proceed and open a ticket.\n` +
         `⏳ *This message will disappear in 60 seconds.*`,
       components: [row],
     });
 
-    // 🧾 Staff log
-    const staffChannel = await interaction.client.channels
-      .fetch(STAFF_LOG_CHANNEL_ID)
-      .catch(() => null);
-
-    if (staffChannel) {
-      staffChannel.send(
-        `🧾 **Price Request Log**\n` +
-        `👤 User: ${interaction.user.tag} (${interaction.user.id})\n` +
-        `📍 Channel: <#${interaction.channelId}>\n` +
-        `📊 ${fromRank} → ${toRank} (${levels} levels)\n` +
-        `💰 Price: ${price} Robux`
-      ).catch(() => {});
-    } else {
-      console.log("⚠️ Staff log channel not accessible by bot (permissions or wrong ID).");
-    }
-
-    // ⏱ Auto-delete after 60 seconds
+    // Auto-delete after 60 seconds
     setTimeout(async () => {
       try {
         await interaction.deleteReply();
       } catch {}
     }, 60_000);
+
+    // Staff log (optional)
+    try {
+      const staffChannel = await interaction.client.channels
+        .fetch(STAFF_LOG_CHANNEL_ID)
+        .catch(() => null);
+
+      if (staffChannel?.isTextBased()) {
+        const staffPing = STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}>` : "";
+        await staffChannel.send(
+          `🧾 **Price Quote Requested** ${staffPing}\n` +
+            `👤 User: ${interaction.user.tag}\n` +
+            `📍 Channel: <#${interaction.channelId}>\n` +
+            `📊 ${fromRank} → ${toRank} (${levels} steps)\n` +
+            `💰 Net: ${fmt(net)} | Gamepass (est): ${fmt(gross)}`
+        );
+      }
+    } catch {
+      // ignore logging failures
+    }
   },
 };
