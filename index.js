@@ -180,16 +180,16 @@ async function createTicket(interaction) {
         PermissionsBitField.Flags.ReadMessageHistory,
       ],
     },
-    {
-      id: client.user.id,
-      allow: [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.ReadMessageHistory,
-        PermissionsBitField.Flags.ManageChannels,
-        PermissionsBitField.Flags.ManagePermissions,
-      ],
-    },
+{
+  id: client.user.id,
+  allow: [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.ReadMessageHistory,
+    PermissionsBitField.Flags.ManageChannels,
+  ],
+},
+
   ];
 
   // Staff role access + ping
@@ -307,3 +307,4 @@ client.on("messageCreate", async (message) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
