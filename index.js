@@ -139,20 +139,26 @@ client.on("interactionCreate", async (interaction) => {
         ephemeral: true,
       });
     }
-  } catch (err) {
-    console.error("❌ Interaction error:", err);
+} catch (err) {
+  console.error("❌ Interaction error:", err);
 
-    // Avoid "already replied" errors
-    if (interaction.isRepliable()) {
-      try {
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: "❌ Something went wrong.", ephemeral: true });
-        } else {
-          await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true });
-        }
-      } catch {}
-    }
+  const msg =
+    err?.code === 50013
+      ? "❌ I’m missing permissions to create the ticket channel. Check: **Manage Channels** + category permissions for the bot."
+      : `❌ Something went wrong.\nError: \`${err?.message || err}\``;
+
+  if (interaction.isRepliable()) {
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: msg, ephemeral: true });
+      } else {
+        await interaction.reply({ content: msg, ephemeral: true });
+      }
+    } catch {}
   }
+}
+
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
