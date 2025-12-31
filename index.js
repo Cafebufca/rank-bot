@@ -205,6 +205,11 @@ async function createTicket(interaction) {
     });
   }
 
+  for (const ow of overwrites) {
+  if (ow.allow) ow.allow = ow.allow.filter(Boolean);
+  if (ow.deny) ow.deny = ow.deny.filter(Boolean);
+}
+
   const channel = await guild.channels.create({
     name: safeName || `ticket-${user.id}`,
     type: ChannelType.GuildText,
@@ -307,4 +312,5 @@ client.on("messageCreate", async (message) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
 
