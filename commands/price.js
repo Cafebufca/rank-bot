@@ -1,6 +1,15 @@
-const { SlashCommandBuilder } = require("discord.js");
+const {
+  SlashCommandBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require("discord.js");
 
 const PRICE_PER_LEVEL = 50;
+
+// 🔧 CHANGE THESE
+const ALLOWED_CHANNEL_ID = "PASTE_BOT_CHANNEL_ID_HERE";
+const STAFF_LOG_CHANNEL_ID = "PASTE_STAFF_CHANNEL_ID_HERE";
 
 const RANKS = [
   "Bronze 1", "Bronze 2", "Bronze 3",
@@ -18,7 +27,7 @@ const rankChoices = RANKS.map(r => ({ name: r, value: r }));
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("price")
-    .setDescription("Calculate Robux cost to rank up (50 Robux per level).")
+    .setDescription("Calculate the Robux cost to rank up.")
     .addStringOption(option =>
       option
         .setName("rank")
@@ -35,26 +44,71 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // 📍 Channel restriction
+    if (interaction.channelId !== ALLOWED_CHANNEL_ID) {
+      return interaction.reply({
+        content: "❌ Please use this command in the designated pricing channel.",
+        ephemeral: true,
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
     const fromRank = interaction.options.getString("rank");
     const toRank = interaction.options.getString("to");
 
     const fromIndex = RANKS.indexOf(fromRank);
     const toIndex = RANKS.indexOf(toRank);
-
     const levels = toIndex - fromIndex;
 
     if (levels <= 0) {
-      return interaction.reply({
-        content: `❌ Target rank must be higher than current.\nYou selected **${fromRank} → ${toRank}**.`,
-        ephemeral: true,
-      });
+      return interaction.editReply(
+        `❌ Target rank must be higher than current.\nYou selected **${fromRank} → ${toRank}**.`
+      );
     }
 
     const price = levels * PRICE_PER_LEVEL;
 
-    return interaction.reply({
-      content: `The price for this rank up will be **${price} Robux** (**${levels} levels**).`,
-      ephemeral: true,
+    // 🛒 Button: Open Ticket
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel("🛒 Open Ticket")
+        .setStyle(ButtonStyle.Primary)
+        .setCustomId("open_ticket")
+    );
+
+    // ⏳ User reply
+    await interaction.editReply({
+      content:
+        `📈 **Price Calculation**\n\n` +
+        `• **From:** ${fromRank}\n` +
+        `• **To:** ${toRank}\n` +
+        `• **Levels:** ${levels}\n\n` +
+        `💰 **Total:** **${price} Robux**\n\n` +
+        `⏳ *This message will disappear in 60 seconds.*`,
+      components: [row],
     });
+
+    // 🧾 Staff log
+    const staffChannel = await interaction.client.channels
+      .fetch(STAFF_LOG_CHANNEL_ID)
+      .catch(() => null);
+
+    if (staffChannel) {
+      staffChannel.send(
+        `🧾 **Price Request Log**\n` +
+        `👤 User: ${interaction.user.tag}\n` +
+        `📍 Channel: <#${interaction.channelId}>\n` +
+        `📊 ${fromRank} → ${toRank} (${levels} levels)\n` +
+        `💰 Price: ${price} Robux`
+      );
+    }
+
+    // ⏱ Auto-delete after 60 seconds
+    setTimeout(async () => {
+      try {
+        await interaction.deleteReply();
+      } catch {}
+    }, 60_000);
   },
 };
