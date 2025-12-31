@@ -6,10 +6,6 @@ const {
   GatewayIntentBits,
   ChannelType,
   PermissionFlagsBits,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  ActionRowBuilder,
 } = require("discord.js");
 require("dotenv").config();
 
@@ -54,46 +50,15 @@ client.on("interactionCreate", async (interaction) => {
     // Button click: Open Ticket
     if (interaction.isButton() && interaction.customId === "open_ticket") {
       const quote = client.priceQuotes.get(interaction.user.id);
+
       if (!quote) {
         return interaction.reply({
-          content: "❌ I couldn’t find your price quote. Please run `/price` again.",
+          content: "❌ I couldn’t find your price quote. Please run `/price` again, then click Open Ticket.",
           ephemeral: true,
         });
       }
 
-      const modal = new ModalBuilder()
-        .setCustomId("ticket_modal")
-        .setTitle("Create Ticket");
-
-      const robloxInput = new TextInputBuilder()
-        .setCustomId("roblox_username")
-        .setLabel("Roblox Username")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Enter your Roblox username")
-        .setRequired(true)
-        .setMaxLength(40);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(robloxInput));
-      await interaction.showModal(modal);
-      return;
-    }
-
-    // Modal submit: create ticket channel
-    if (interaction.isModalSubmit() && interaction.customId === "ticket_modal") {
-      const robloxUsername = interaction.fields
-        .getTextInputValue("roblox_username")
-        ?.trim();
-
-      const quote = client.priceQuotes.get(interaction.user.id);
-
-      if (!quote) {
-        return interaction.reply({
-          content: "❌ I couldn’t find your price quote. Please run `/price` again.",
-          ephemeral: true,
-        });
-      }
-
-      // Prevent duplicate tickets (optional but helpful)
+      // Prevent duplicate tickets for same user
       const existing = interaction.guild.channels.cache.find(
         ch =>
           ch.type === ChannelType.GuildText &&
@@ -107,13 +72,13 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const safeName = (robloxUsername || "user")
+      const safeUser = interaction.user.username
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "-")
         .replace(/-+/g, "-")
-        .slice(0, 30);
+        .slice(0, 20);
 
-      const channelName = `ticket-${safeName}`;
+      const channelName = `ticket-${safeUser}`;
 
       const overwrites = [
         { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -146,6 +111,7 @@ client.on("interactionCreate", async (interaction) => {
         },
       ];
 
+      // Create channel (this requires Manage Channels permission)
       const ticketChannel = await interaction.guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
@@ -157,28 +123,33 @@ client.on("interactionCreate", async (interaction) => {
       await ticketChannel.send(
         `🎟️ **Ticket Created**\n\n` +
         `👤 Discord: <@${interaction.user.id}>\n` +
-        `🎮 Roblox Username: **${robloxUsername || "N/A"}**\n\n` +
         `📈 Rank Up: **${quote.fromRank} → ${quote.toRank}** (**${quote.levels} levels**)\n` +
         `💰 Amount Due: **${quote.price} Robux**\n\n` +
+        `✅ **Next Step**\n` +
+        `Please reply with your **Roblox username** in this ticket.\n\n` +
         `✅ **Payment Instructions**\n` +
         `1) Purchase the gamepass for **${quote.price} Robux**\n` +
         `2) Buy it from the Roblox account: **${ROBLOX_SELLER_USERNAME}**\n` +
-        `3) After purchase, reply here with proof (screenshot / transaction info).\n\n` +
+        `3) After purchase, send proof here (screenshot / transaction info).\n\n` +
         `Staff will respond shortly.`
       );
 
-      await interaction.reply({
+      return interaction.reply({
         content: `✅ Ticket created: <#${ticketChannel.id}>`,
         ephemeral: true,
       });
-
-      return;
     }
   } catch (err) {
-    console.error(err);
+    console.error("❌ Interaction error:", err);
+
+    // Avoid "already replied" errors
     if (interaction.isRepliable()) {
       try {
-        await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true });
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: "❌ Something went wrong.", ephemeral: true });
+        } else {
+          await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true });
+        }
       } catch {}
     }
   }
